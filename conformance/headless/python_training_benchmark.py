@@ -14,7 +14,7 @@ def elapsed_rate(count, started):
 
 
 def make_actions(agent_ids):
-    return [DiepAction(agent_id, 0.25, 0.0, 1.0, 0.0, 0, 0, 0) for agent_id in agent_ids]
+    return [DiepAction(agent_id, 0.25, 0.0, 1.0, 0.0, 0, 0, -1, -1) for agent_id in agent_ids]
 
 
 def main():
@@ -59,6 +59,22 @@ def main():
             obs_rate = elapsed_rate(ticks, started)
             assert len(observations) == agents * 21 * 21 * 8
 
+    with HeadlessSim(seed=123, agents=agents, max_ticks=ticks + 10, scenario='agents-no-fire') as sim:
+        actions = make_actions(sim.agent_ids())
+        if np is not None:
+            out = None
+            started = time.perf_counter()
+            for _ in range(ticks):
+                sim.step(actions)
+                states = sim.agent_states_array(out=out)
+                out = states
+            state_rate = elapsed_rate(ticks, started)
+            assert states.shape == (agents, 10)
+            assert states.dtype == np.float32
+            assert np.isfinite(states).all()
+        else:
+            state_rate = 0.0
+
     print({
         'benchmark': 'python-tickless-training-loop',
         'ticks': ticks,
@@ -66,6 +82,7 @@ def main():
         'step_ticks_per_second': round(step_rate, 2),
         'step_many_ticks_per_second': round(step_many_rate, 2),
         'step_plus_observations_ticks_per_second': round(obs_rate, 2),
+        'step_plus_agent_states_ticks_per_second': round(state_rate, 2),
         'numpy': np is not None,
     })
 
