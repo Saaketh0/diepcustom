@@ -21,10 +21,12 @@ class EpisodeStatsSummary:
     score_from_farming: float
     score_from_pvp: float
     damage_dealt: float
+    enemy_damage_dealt: float
     damage_taken: float
     shots_fired: int
     shots_hit: int
-    kills: int
+    enemy_kills: int
+    farm_kills: int
     death_count: int
     death_cause: int
     level_reached: int
@@ -62,10 +64,12 @@ class EpisodeStatsSummary:
             score_from_farming=farming,
             score_from_pvp=pvp,
             damage_dealt=float(values['damage_dealt']),
+            enemy_damage_dealt=float(values['enemy_damage_dealt']),
             damage_taken=float(values['damage_taken']),
             shots_fired=shots_fired,
             shots_hit=shots_hit,
-            kills=int(values['kills']),
+            enemy_kills=int(values['enemy_kills']),
+            farm_kills=int(values['farm_kills']),
             death_count=int(values['death_count']),
             death_cause=int(values['death_cause']),
             level_reached=int(values['level_reached']),

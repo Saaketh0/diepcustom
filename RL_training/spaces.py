@@ -32,15 +32,19 @@ class FallbackBox:
         return [0.0] * size
 
 
-class FallbackMultiBinary:
-    def __init__(self, n):
-        self.n = int(n)
-        self.shape = (self.n,)
+class FallbackMultiDiscrete:
+    def __init__(self, nvec):
+        self.nvec = tuple(int(value) for value in nvec)
+        self.shape = (len(self.nvec),)
 
     def sample(self):
         if np is not None:
-            return np.zeros(self.shape, dtype=np.int8)
-        return [0] * self.n
+            return np.zeros(self.shape, dtype=np.int64)
+        return [0] * len(self.nvec)
+
+
+# Backward-compatible alias for older smoke fixtures.
+FallbackMultiBinary = FallbackMultiDiscrete
 
 
 class FallbackDict(dict):
@@ -64,20 +68,20 @@ def make_action_space():
         return spaces.Dict({
             'move': spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=dtype),
             'aim': spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=dtype),
-            'buttons': spaces.MultiBinary(2),
+            'buttons': spaces.MultiDiscrete([2, 2]),
             'stat_upgrade_choice': spaces.Box(low=-1.0, high=float(STAT_UPGRADE_COUNT - 1), shape=(), dtype=dtype),
             'tank_upgrade_choice': spaces.Box(low=-1.0, high=float(TANK_UPGRADE_SLOT_COUNT - 1), shape=(), dtype=dtype),
         })
     return FallbackDict({
         'move': FallbackBox(-1.0, 1.0, (2,), float),
         'aim': FallbackBox(-1.0, 1.0, (2,), float),
-        'buttons': FallbackMultiBinary(2),
+        'buttons': FallbackMultiDiscrete([2, 2]),
         'stat_upgrade_choice': FallbackBox(-1.0, float(STAT_UPGRADE_COUNT - 1), (), float),
         'tank_upgrade_choice': FallbackBox(-1.0, float(TANK_UPGRADE_SLOT_COUNT - 1), (), float),
     })
 
 
 __all__ = [
-    'np', 'spaces', 'FallbackBox', 'FallbackMultiBinary', 'FallbackDict',
+    'np', 'spaces', 'FallbackBox', 'FallbackMultiBinary', 'FallbackMultiDiscrete', 'FallbackDict',
     '_float_dtype', '_dict_space', 'make_action_space',
 ]

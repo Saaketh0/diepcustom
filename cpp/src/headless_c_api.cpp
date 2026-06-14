@@ -43,7 +43,7 @@ std::vector<diepcustom::headless::Action> toActions(const diep_action* actions, 
 }
 } // namespace
 
-extern "C" int diep_abi_version(void) { return 10; }
+extern "C" int diep_abi_version(void) { return 12; }
 
 extern "C" int diep_last_error(diep_sim* sim) { return sim ? sim->last_error : DIEP_ERROR_NULL; }
 

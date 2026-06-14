@@ -11,8 +11,8 @@ from python.diep_headless import (
     episode_stats_shape,
 )
 
-assert ABI_VERSION == 10
-assert abi_version() == 10
+assert ABI_VERSION == 12
+assert abi_version() == 12
 assert action_shape()['fields'] == 9
 assert action_shape()['continuous_count'] == 4
 assert combat_observation_shape() == {'channels': 18, 'rows': 21, 'cols': 21, 'layout': 2}
@@ -34,9 +34,9 @@ with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='rl-grid-smoke') as s
     episode_stats = sim.episode_stats()
     assert len(episode_stats) == len(EPISODE_STATS_FIELDS)
     assert episode_stats[0] == 0.0
-    assert episode_stats[11] == 1.0
-    assert episode_stats[12] == 0.0
-    assert episode_stats[13] == 0.0
+    assert episode_stats[EPISODE_STATS_FIELDS.index('level_reached')] == 1.0
+    assert episode_stats[EPISODE_STATS_FIELDS.index('tank_class')] == 0.0
+    assert episode_stats[EPISODE_STATS_FIELDS.index('upgrade_choices')] == 0.0
     try:
         combat_obs_array = sim.combat_observations_array()
         assert combat_obs_array.shape == (1, 18, 21, 21)
@@ -65,7 +65,7 @@ with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='rl-grid-smoke') as s
         episode_stats_array = sim.episode_stats_array()
         assert episode_stats_array.shape == (1, len(EPISODE_STATS_FIELDS))
         assert str(episode_stats_array.dtype) == 'float64'
-        assert episode_stats_array[0, 13] == 0.0
+        assert episode_stats_array[0, EPISODE_STATS_FIELDS.index('upgrade_choices')] == 0.0
     except RuntimeError as exc:
         assert 'NumPy' in str(exc)
     assert any(v > 0 for v in combat_obs)
@@ -74,13 +74,13 @@ with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='rl-grid-smoke') as s
     assert sim.combat_prev_action_observation(0) == [1.0, 0.0, 1.0, 0.0, 1.0]
     episode_stats = sim.episode_stats()
     assert episode_stats[0] == 1.0
-    assert episode_stats[6] == 1.0
+    assert episode_stats[EPISODE_STATS_FIELDS.index('shots_fired')] == 1.0
     result = sim.step_many([DiepAction(0, 1.0, 0.0, 1.0, 0.0, 0, 0, -1, -1)], 3)
     assert result['tick'] == 4
     sim.reset(123)
     assert sim.snapshot() == snap0
     assert sim.combat_prev_action_observation(0) == [0.0] * 5
-    assert sim.episode_stats()[6] == 0.0
+    assert sim.episode_stats()[EPISODE_STATS_FIELDS.index('shots_fired')] == 0.0
 
 with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='upgrade-ready') as sim:
     try:
@@ -105,8 +105,8 @@ with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='upgrade-ready') as s
         progression_array = sim.agent_progressions_array()
         assert progression_array[0, 1] == 1.0
         episode_stats_array = sim.episode_stats_array()
-        assert episode_stats_array[0, 12] == 1.0
-        assert episode_stats_array[0, 13] > 0.0
+        assert episode_stats_array[0, EPISODE_STATS_FIELDS.index('tank_class')] == 1.0
+        assert episode_stats_array[0, EPISODE_STATS_FIELDS.index('upgrade_choices')] > 0.0
         previous_tank = progression_array[0, 1]
         sim.step([DiepAction(0, 0.0, 0.0, 1.0, 0.0, 0, 0, -1, 5)])
         progression_array = sim.agent_progressions_array()
@@ -126,11 +126,17 @@ with HeadlessSim(seed=1, agents=4, max_ticks=200, scenario='dense-collision') as
     assert all(value == 0.0 for value in padded_combat)
     episode_stats = sim.episode_stats()
     assert len(episode_stats) == 4 * len(EPISODE_STATS_FIELDS)
-    death_count_sum = sum(episode_stats[index] for index in range(9, len(episode_stats), len(EPISODE_STATS_FIELDS)))
-    damage_dealt_sum = sum(episode_stats[index] for index in range(4, len(episode_stats), len(EPISODE_STATS_FIELDS)))
-    damage_taken_sum = sum(episode_stats[index] for index in range(5, len(episode_stats), len(EPISODE_STATS_FIELDS)))
+    death_count_index = EPISODE_STATS_FIELDS.index('death_count')
+    damage_dealt_index = EPISODE_STATS_FIELDS.index('damage_dealt')
+    enemy_damage_dealt_index = EPISODE_STATS_FIELDS.index('enemy_damage_dealt')
+    damage_taken_index = EPISODE_STATS_FIELDS.index('damage_taken')
+    death_count_sum = sum(episode_stats[index] for index in range(death_count_index, len(episode_stats), len(EPISODE_STATS_FIELDS)))
+    damage_dealt_sum = sum(episode_stats[index] for index in range(damage_dealt_index, len(episode_stats), len(EPISODE_STATS_FIELDS)))
+    enemy_damage_dealt_sum = sum(episode_stats[index] for index in range(enemy_damage_dealt_index, len(episode_stats), len(EPISODE_STATS_FIELDS)))
+    damage_taken_sum = sum(episode_stats[index] for index in range(damage_taken_index, len(episode_stats), len(EPISODE_STATS_FIELDS)))
     assert death_count_sum == 4.0
     assert damage_dealt_sum > 0.0
+    assert enemy_damage_dealt_sum > 0.0
     assert damage_taken_sum > 0.0
     try:
         padded_combat_array = sim.combat_observations_array()
@@ -150,6 +156,6 @@ with HeadlessSim(seed=1, agents=4, max_ticks=200, scenario='dense-collision') as
         assert combat_prev_array.shape == (4, 5)
         episode_stats_array = sim.episode_stats_array()
         assert episode_stats_array.shape == (4, len(EPISODE_STATS_FIELDS))
-        assert episode_stats_array[:, 9].sum() == 4.0
+        assert episode_stats_array[:, EPISODE_STATS_FIELDS.index('death_count')].sum() == 4.0
     except RuntimeError as exc:
         assert 'NumPy' in str(exc)

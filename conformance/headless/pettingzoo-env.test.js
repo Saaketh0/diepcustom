@@ -38,13 +38,7 @@ test('Python tickless training benchmark runs batched C ABI paths', () => {
   execFileSync(python, ['conformance/headless/python_training_benchmark.py'], { cwd: root, stdio: 'inherit' });
 });
 
-test('SB3 combat smoke passes when optional dependencies are installed', () => {
-  const venvPython = path.join(root, '.venv/bin/python');
-  const python = fs.existsSync(venvPython) ? venvPython : 'python3';
-  execFileSync(python, ['conformance/headless/python_sb3_combat_smoke.py'], { cwd: root, stdio: 'inherit' });
-});
-
-test('Gym combat wrapper smoke passes when Gymnasium is installed', () => {
+test('Combat env smoke passes', () => {
   const venvPython = path.join(root, '.venv/bin/python');
   const python = fs.existsSync(venvPython) ? venvPython : 'python3';
   execFileSync(python, ['conformance/headless/python_gym_combat_wrapper_smoke.py'], { cwd: root, stdio: 'inherit' });

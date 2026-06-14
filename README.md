@@ -22,7 +22,7 @@ Requirements:
 - Node.js
 - npm
 - CMake (for `npm run test:cpp`, `npm run test:parity`, and headless/C++ work)
-- Python + optional `.venv` tooling only if you are using the RL/PettingZoo flow
+- **Python 3.12** + optional `.venv` tooling only if you are using the RL/PettingZoo flow (3.9–3.11 are unsupported; the RL stack uses 3.10+ type syntax such as `tuple[int, ...] | None` in `RL_training/auto_upgrade.py`)
 
 Install dependencies with:
 
@@ -106,7 +106,10 @@ Start here:
 - [docs/headless-rl-action-abi.md](./docs/headless-rl-action-abi.md)
 - [docs/headless-rl-handoff.md](./docs/headless-rl-handoff.md)
 - [PETTINGZOO_REWARDS_QUICKSTART.md](./PETTINGZOO_REWARDS_QUICKSTART.md)
-- [RL_testing/SB3_test/README.md](./RL_testing/SB3_test/README.md)
+- [RL_testing/ghost_model.md](./RL_testing/ghost_model.md) — ghost league architecture and persistence
+- [RL_testing/ray_code.py](./RL_testing/ray_code.py) — Ray RLlib PPO training entry point
+
+Training data (league weights + RLlib checkpoints) lives under `diepcustom/training_data/` (`redis/`, `redis-server/`, `RLlib/`).
 
 ## Configuration notes
 

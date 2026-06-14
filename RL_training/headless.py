@@ -17,7 +17,7 @@ DIEP_ERROR_INVALID_AGENT = -4
 DIEP_LAYOUT_CHANNEL_LAST = 1
 DIEP_LAYOUT_CHANNEL_FIRST = 2
 DIEP_ACTION_LAYOUT_V1_STRUCT = 1
-ABI_VERSION = 10
+ABI_VERSION = 12
 AGENT_STATE_FIELDS = ('agent_id', 'alive', 'x', 'y', 'vx', 'vy', 'health', 'max_health', 'score', 'team_id')
 EPISODE_STATS_FIELDS = (
     'lifetime_steps',
@@ -25,10 +25,12 @@ EPISODE_STATS_FIELDS = (
     'score_from_farming',
     'score_from_pvp',
     'damage_dealt',
+    'enemy_damage_dealt',
     'damage_taken',
     'shots_fired',
     'shots_hit',
-    'kills',
+    'enemy_kills',
+    'farm_kills',
     'death_count',
     'death_cause',
     'level_reached',

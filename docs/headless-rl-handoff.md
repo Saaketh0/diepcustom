@@ -1,6 +1,6 @@
 # Headless RL Environment Handoff
 
-Last updated: 2026-05-27
+Last updated: 2026-06-13
 
 ## Goal
 
@@ -55,7 +55,7 @@ Core files:
 - `cpp/src/headless_c_api.cpp`
 - `cpp/tests/headless_c_api_smoke_test.cpp`
 
-Current ABI version: **8**.
+Current ABI version: **10**.
 
 Public additions/progress:
 
@@ -103,7 +103,7 @@ Implemented API:
 - `HeadlessSim.agent_states_array(out=None)`
 - `HeadlessSim.agent_progressions_array(out=None)`
 - `HeadlessSim.alive_mask()`
-- `abi_version()`, currently expected to be `8`
+- `abi_version()`, currently expected to be `10`
 
 Important behavior:
 
@@ -168,6 +168,7 @@ Files:
 - `conformance/headless/python_pettingzoo_smoke.py`
 - `conformance/headless/python_pettingzoo_api_test.py`
 - `conformance/headless/python_training_benchmark.py`
+- `conformance/headless/python_gym_combat_wrapper_smoke.py`
 - `conformance/headless/determinism.test.js`
 - `conformance/headless/python-ctypes.test.js`
 - `conformance/headless/pettingzoo-env.test.js`
@@ -221,6 +222,48 @@ rl-grid-smoke: ~517k ticks/sec
 observationReport: ~9.5k ticks/sec with observe-all path
 ```
 
+## RLlib training stack
+
+Trainer: **Ray RLlib PPO** via `RL_testing/ray_code.py`. Stable Baselines 3 is not used.
+
+Core files:
+
+- `RL_testing/ray_code.py` — Tune job, 20-agent multi-policy config
+- `RL_testing/resume_from_checkpoint.py` — `Tuner.restore` resume entry point
+- `RL_testing/resume_from_checkpoint.py` — experiment path resolution + shared training constants
+- `RL_testing/league_initialization/` — ghost league callback, Redis/SSD persistence, seed CLI
+- `RL_testing/ghost_model.md` — league architecture, two-track persistence, limitations
+
+### Training data layout (`diepcustom/training_data/`)
+
+| Path | Purpose |
+|------|---------|
+| `redis/` | Lean league weight exports (`{class}/iter_{N}.safetensors`) |
+| `redis-server/` | Redis Docker bind mount (AOF/RDB) |
+| `RLlib/` | Bulky Tune checkpoints for training resume (every 5 iterations) |
+
+### Quick start
+
+```bash
+cd diepcustom/RL_testing
+./start_redis.sh
+PYTHONPATH=.. python -m league_initialization.seed_league_cache   # first time only
+PYTHONPATH=.. python ray_code.py                                  # fresh training
+PYTHONPATH=.. python resume_from_checkpoint.py                         # resume
+```
+
+**Resume requires both tracks:** start Redis and ensure league SSD/Redis from the same run exists. RLlib checkpoints restore learner/main weights and iteration count; they do **not** restore mid-episode Diep C++ world state.
+
+### League loop (implemented)
+
+- `LeagueBootstrapCallback.on_algorithm_init` — hydrate Redis from SSD if empty; load ghosts
+- `LeagueBootstrapCallback.on_train_result` — save 4 mains to Redis+SSD; refresh 16 ghost modules globally
+- All parallel envs share the same 16 ghost policy IDs (per-env ghost diversity not implemented)
+
+Smoke tests: `pytest RL_testing/test_checkpoint_config.py RL_testing/league_initialization/`
+
+---
+
 ## Current git/worktree note
 
 Check the current worktree state with `git status --short` before batching RL/headless changes into commits. This repo often carries parallel parity, Python-wrapper, and docs work at the same time.
@@ -241,9 +284,9 @@ Do not commit `.venv/`, Python cache folders, build outputs, or generated local 
    - Some existing benchmark scenarios naturally kill agents. That is acceptable for termination testing but not ideal for early learning smoke tests.
    - Add a dedicated training scenario where agents spawn safely and shapes/projectiles are controlled enough for repeatable learning diagnostics.
 
-3. **Vectorized trainer integration**
-   - Add examples for RLlib/SuperSuit/vectorized PettingZoo flows if those are selected.
-   - Keep this outside core C++ until a concrete trainer is chosen.
+3. **RLlib callback integration**
+   - Wire `DiepMetricsCallback` from `observability/` into `ray_code.py` for episode metrics logging.
+   - Per-env ghost diversity remains a future architecture decision (see `ghost_model.md` Option B).
 
 4. **Reward adapter examples**
    - Provide external reward callback examples in Python only.
@@ -271,10 +314,12 @@ npm run test:parity
 npm run check
 ```
 
-If `.venv` is missing, recreate it locally and install Python dependencies:
+If `.venv` is missing, recreate it locally with **Python 3.12** and install Python dependencies:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install pettingzoo gymnasium numpy
+.venv/bin/python -m pip install -r RL_testing/requirements.txt
 ```
+
+The RL stack requires Python 3.12+ (`requires-python` in `pyproject.toml`). Older interpreters fail on modern type syntax (for example `tuple[int, ...] | None` in `RL_training/auto_upgrade.py`).

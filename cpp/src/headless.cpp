@@ -203,6 +203,12 @@ double clipSigned(double value, double scale) {
   return std::max(-1.0, std::min(1.0, value / scale));
 }
 
+double squaredDistance(double ax, double ay, double bx, double by) {
+  const double dx = ax - bx;
+  const double dy = ay - by;
+  return dx * dx + dy * dy;
+}
+
 double arenaCenterNorm(double value, double low, double high) {
   if (high <= low) return 0.5;
   return clip01((value - low) / (high - low));
@@ -342,9 +348,16 @@ void Simulation::reset(std::uint64_t seed) {
 void Simulation::initializeWorld() {
   arena_ = Arena();
   combatPrevActions_.assign(static_cast<std::size_t>(std::max(0, config_.agents)), std::array<float, 5>{});
+  const TrainingScenarioConfig training = trainingScenarioConfig();
+  if (training.enabled) configureTrainingArena(training);
   if (config_.scenario == "empty-arena") return;
-  for (int i = 0; i < config_.agents; ++i) spawnAgent(i);
-  if (config_.scenario == "dense-collision") {
+  for (int i = 0; i < config_.agents; ++i) {
+    if (training.enabled) spawnTrainingAgent(i, training);
+    else spawnAgent(i);
+  }
+  if (training.enabled) {
+    spawnInitialTrainingShapes(training);
+  } else if (config_.scenario == "dense-collision") {
     for (int i = 0; i < 24; ++i) spawnShape(i);
   } else if (config_.scenario == "agents-projectiles" || config_.scenario == "basic-bullet-parity") {
     for (int i = 0; i < config_.agents; ++i) {
@@ -362,6 +375,24 @@ void Simulation::initializeWorld() {
   } else {
     for (int i = 0; i < 4; ++i) spawnShape(i);
   }
+}
+
+Simulation::TrainingScenarioConfig Simulation::trainingScenarioConfig() const {
+  if (config_.scenario == "training-ffa-easy") return TrainingScenarioConfig{true, 3200.0, 240};
+  if (config_.scenario == "training-ffa-medium") return TrainingScenarioConfig{true, 4800.0, 400};
+  if (config_.scenario == "training-ffa-hard") return TrainingScenarioConfig{true, 6400.0, 600};
+  return TrainingScenarioConfig{};
+}
+
+bool Simulation::isTrainingScenario() const { return trainingScenarioConfig().enabled; }
+
+void Simulation::configureTrainingArena(const TrainingScenarioConfig& scenario) {
+  const double half = scenario.arenaSize * 0.5;
+  arena_.leftX = -half;
+  arena_.rightX = half;
+  arena_.topY = -half;
+  arena_.bottomY = half;
+  arena_.padding = 200;
 }
 
 void Simulation::spawnAgent(int index) {
@@ -386,6 +417,68 @@ void Simulation::spawnAgent(int index) {
   e.scoreReward = 25;
   if (config_.scenario == "upgrade-ready") e.score = levelToScore(MaxPlayerLevel);
   applyTankDefinition(e);
+  entities_.push_back(e);
+  agentIds_.push_back(e.id);
+  possibleAgentIds_.push_back(e.id);
+  syncEpisodeStatsFromEntity(entities_.back());
+}
+
+void Simulation::spawnTrainingAgent(int index, const TrainingScenarioConfig& scenario) {
+  Entity e;
+  e.id = nextId_++;
+  e.hash = nextHash_++;
+  e.kind = "agent";
+  e.agentIndex = index;
+  e.teamId = e.id;
+  e.health = e.maxHealth = 50;
+  e.damagePerTick = 5;
+  e.maxDamageMultiplier = 6;
+  e.currentTankId = BasicTankId;
+  e.size = e.width = 50;
+  e.styleColor = ColorTank;
+  e.scoreReward = 25;
+  applyTankDefinition(e);
+
+  constexpr int randomAttempts = 512;
+  constexpr double agentClearance = 180.0;
+  for (int attempt = 0; attempt < randomAttempts; ++attempt) {
+    const double radius = e.size + 10.0;
+    const double x = arena_.leftX + radius + rng_.nextDouble01() * (scenario.arenaSize - 2.0 * radius);
+    const double y = arena_.topY + radius + rng_.nextDouble01() * (scenario.arenaSize - 2.0 * radius);
+    if (!overlapsPhysicalEntities(x, y, e.size, agentClearance, false)) {
+      e.x = x;
+      e.y = y;
+      e.angle = rng_.nextDouble01() * 2.0 * Pi;
+      entities_.push_back(e);
+      agentIds_.push_back(e.id);
+      possibleAgentIds_.push_back(e.id);
+      syncEpisodeStatsFromEntity(entities_.back());
+      return;
+    }
+  }
+
+  const int gridCols = std::max(1, static_cast<int>(std::ceil(std::sqrt(std::max(1, config_.agents)))));
+  const double cell = scenario.arenaSize / static_cast<double>(gridCols + 1);
+  for (int offset = 0; offset < gridCols * gridCols; ++offset) {
+    const int slot = (index + offset) % (gridCols * gridCols);
+    const int col = slot % gridCols;
+    const int row = slot / gridCols;
+    const double x = arena_.leftX + cell * (col + 1);
+    const double y = arena_.topY + cell * (row + 1);
+    if (!overlapsPhysicalEntities(x, y, e.size, agentClearance * 0.5, false)) {
+      e.x = x;
+      e.y = y;
+      e.angle = std::atan2(-y, -x);
+      entities_.push_back(e);
+      agentIds_.push_back(e.id);
+      possibleAgentIds_.push_back(e.id);
+      syncEpisodeStatsFromEntity(entities_.back());
+      return;
+    }
+  }
+
+  e.x = std::max(arena_.leftX + e.size, std::min(arena_.rightX - e.size, 0.0));
+  e.y = std::max(arena_.topY + e.size, std::min(arena_.bottomY - e.size, 0.0));
   entities_.push_back(e);
   agentIds_.push_back(e.id);
   possibleAgentIds_.push_back(e.id);
@@ -481,6 +574,105 @@ void Simulation::spawnManagedShape(int index) {
   spawnShapeAt(index, type, x, y);
 }
 
+void Simulation::spawnInitialTrainingShapes(const TrainingScenarioConfig& scenario) {
+  const int maxTotalAttempts = std::max(2000, scenario.targetShapes * 80);
+  int attempts = 0;
+  int index = 0;
+  while (countLiveTrainingShapes() < scenario.targetShapes && attempts < maxTotalAttempts) {
+    attempts += 1;
+    if (spawnTrainingShapeInBlankSpot(index, scenario, 1)) index += 1;
+  }
+}
+
+void Simulation::maintainTrainingShapePopulation(const TrainingScenarioConfig& scenario) {
+  const int liveShapes = countLiveTrainingShapes();
+  if (liveShapes >= scenario.targetShapes) return;
+  const int refillCap = std::min(scenario.targetShapes - liveShapes, std::max(8, scenario.targetShapes / 50));
+  const int maxAttempts = std::max(24, refillCap * 30);
+  int accepted = 0;
+  for (int attempt = 0; accepted < refillCap && attempt < maxAttempts; ++attempt) {
+    if (spawnTrainingShapeInBlankSpot(liveShapes + accepted, scenario, 1)) accepted += 1;
+  }
+}
+
+bool Simulation::spawnTrainingShapeInBlankSpot(int index, const TrainingScenarioConfig& scenario, int maxAttempts) {
+  for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+    const std::string shapeKind = randomTrainingShapeKind(scenario);
+    Entity probe;
+    configureShape(probe, shapeKind);
+    const TrainingSpawnPoint point = randomTrainingShapePoint(scenario, shapeKind);
+    if (!isInsideTrainingSpawnBounds(point.x, point.y, probe.size)) continue;
+    if (overlapsPhysicalEntities(point.x, point.y, probe.size, 12.0, true)) continue;
+    spawnShapeAt(index, shapeKind, point.x, point.y);
+    return true;
+  }
+  return false;
+}
+
+int Simulation::countLiveTrainingShapes() const {
+  int count = 0;
+  for (const auto& entity : entities_) {
+    if (!entity.removed && !entity.deleting && (entity.kind == "shape" || entity.kind == "crasher")) count += 1;
+  }
+  return count;
+}
+
+std::string Simulation::randomTrainingShapeKind(const TrainingScenarioConfig&) {
+  const double zoneRoll = rng_.nextDouble01();
+  if (zoneRoll < 0.08) return "pentagon";
+  if (zoneRoll < 0.20) return "crasher";
+  const double typeRoll = rng_.nextDouble01();
+  if (typeRoll < 0.04) return "pentagon";
+  if (typeRoll < 0.20) return "triangle";
+  return "square";
+}
+
+Simulation::TrainingSpawnPoint Simulation::randomTrainingShapePoint(const TrainingScenarioConfig& scenario, const std::string& shapeKind) {
+  const double half = scenario.arenaSize * 0.5;
+  const double centerNestRadius = half * 0.13;
+  const double innerCrasherMin = half * 0.13;
+  const double innerCrasherMax = half * 0.30;
+  const double outerMin = half * 0.30;
+  const double margin = 90.0;
+
+  const auto sampleInSquare = [&](double minAbs, double maxAbs) {
+    for (int attempt = 0; attempt < 64; ++attempt) {
+      const double x = -maxAbs + rng_.nextDouble01() * (2.0 * maxAbs);
+      const double y = -maxAbs + rng_.nextDouble01() * (2.0 * maxAbs);
+      const double chebyshev = std::max(std::fabs(x), std::fabs(y));
+      if (chebyshev >= minAbs && chebyshev <= maxAbs) return TrainingSpawnPoint{x, y};
+    }
+    const double angle = rng_.nextDouble01() * 2.0 * Pi;
+    const double radius = minAbs + rng_.nextDouble01() * std::max(1.0, maxAbs - minAbs);
+    return TrainingSpawnPoint{std::cos(angle) * radius, std::sin(angle) * radius};
+  };
+
+  if (shapeKind == "pentagon" && rng_.nextDouble01() < 0.70) {
+    return sampleInSquare(0.0, centerNestRadius);
+  }
+  if (shapeKind == "crasher") {
+    return sampleInSquare(innerCrasherMin, innerCrasherMax);
+  }
+  return sampleInSquare(outerMin, half - margin);
+}
+
+bool Simulation::isInsideTrainingSpawnBounds(double x, double y, double radius) const {
+  return x >= arena_.leftX + radius && x <= arena_.rightX - radius &&
+         y >= arena_.topY + radius && y <= arena_.bottomY - radius;
+}
+
+bool Simulation::overlapsPhysicalEntities(double x, double y, double radius, double extraClearance, bool includeProjectiles) const {
+  if (!isInsideTrainingSpawnBounds(x, y, radius)) return true;
+  for (const auto& entity : entities_) {
+    if (entity.removed || entity.deleting || !entity.isPhysical) continue;
+    if (!includeProjectiles && entity.kind == "projectile") continue;
+    if (!(entity.kind == "agent" || entity.kind == "shape" || entity.kind == "crasher" || entity.kind == "projectile")) continue;
+    const double clearance = radius + entity.size + extraClearance;
+    if (squaredDistance(x, y, entity.x, entity.y) <= clearance * clearance) return true;
+  }
+  return false;
+}
+
 Simulation::Entity* Simulation::findEntity(int id) {
   for (auto& entity : entities_) if (entity.id == id && !entity.removed) return &entity;
   return nullptr;
@@ -553,9 +745,13 @@ void Simulation::recordShotHit(const Entity& source) {
   if (EpisodeStats* stats = episodeStatsForAgentId(agentId)) stats->shotsHit += 1;
 }
 
-void Simulation::recordDamageDealt(const Entity& source, double amount) {
+void Simulation::recordDamageDealt(const Entity& source, const Entity& target, double amount) {
   const int agentId = source.ownerId >= 0 ? source.ownerId : source.id;
-  if (EpisodeStats* stats = episodeStatsForAgentId(agentId)) stats->damageDealt += std::max(0.0, amount);
+  if (EpisodeStats* stats = episodeStatsForAgentId(agentId)) {
+    const double positiveAmount = std::max(0.0, amount);
+    stats->damageDealt += positiveAmount;
+    if (target.kind == "agent") stats->enemyDamageDealt += positiveAmount;
+  }
 }
 
 void Simulation::recordDamageTaken(const Entity& target, double amount) {
@@ -565,15 +761,21 @@ void Simulation::recordDamageTaken(const Entity& target, double amount) {
 void Simulation::recordKill(const Entity& source, const Entity& target) {
   if (target.kind != "agent") return;
   const int agentId = source.ownerId >= 0 ? source.ownerId : source.id;
-  if (EpisodeStats* stats = episodeStatsForAgentId(agentId)) stats->kills += 1;
+  if (EpisodeStats* stats = episodeStatsForAgentId(agentId)) stats->enemyKills += 1;
 }
 
 void Simulation::recordScoreReward(const Entity& source, const Entity& target) {
   const int agentId = source.ownerId >= 0 ? source.ownerId : source.id;
   EpisodeStats* stats = episodeStatsForAgentId(agentId);
   if (!stats) return;
-  if (target.kind == "agent") stats->scoreFromPvp += target.scoreReward;
-  else stats->scoreFromFarming += target.scoreReward;
+  if (target.kind == "agent") {
+    stats->scoreFromPvp += target.scoreReward;
+  } else if (target.kind == "shape" || target.kind == "crasher") {
+    stats->scoreFromFarming += target.scoreReward;
+    stats->farmKills += 1;
+  } else {
+    stats->scoreFromFarming += target.scoreReward;
+  }
 }
 
 void Simulation::recordDeath(Entity& target, const Entity&, DeathCause cause) {
@@ -626,6 +828,8 @@ StepResult Simulation::step(const std::vector<Action>& actions) {
   integrateEntities();
   syncEpisodeStatsFromLiveAgents();
   cleanupEntities();
+  const TrainingScenarioConfig training = trainingScenarioConfig();
+  if (training.enabled) maintainTrainingShapePopulation(training);
   result.tick = tick_;
   result.done = tick_ >= config_.maxTicks || agentIds_.empty();
   return result;
@@ -874,7 +1078,7 @@ void Simulation::receiveDamage(Entity& target, Entity& source, double amount, St
   target.health -= amount;
   const double appliedDamage = std::max(0.0, before - std::max(0.0, target.health));
   if (appliedDamage > 0.0) {
-    recordDamageDealt(source, appliedDamage);
+    recordDamageDealt(source, target, appliedDamage);
     if (target.kind == "agent") recordDamageTaken(target, appliedDamage);
     if (source.kind == "projectile" && target.kind != "projectile") recordShotHit(source);
   }
@@ -1452,15 +1656,17 @@ int Simulation::writeEpisodeStats(double* buffer, int bufferLen) const {
     buffer[offset + 2] = stats.scoreFromFarming;
     buffer[offset + 3] = stats.scoreFromPvp;
     buffer[offset + 4] = stats.damageDealt;
-    buffer[offset + 5] = stats.damageTaken;
-    buffer[offset + 6] = static_cast<double>(stats.shotsFired);
-    buffer[offset + 7] = static_cast<double>(stats.shotsHit);
-    buffer[offset + 8] = static_cast<double>(stats.kills);
-    buffer[offset + 9] = static_cast<double>(stats.deathCount);
-    buffer[offset + 10] = static_cast<double>(static_cast<int>(stats.deathCause));
-    buffer[offset + 11] = static_cast<double>(stats.levelReached);
-    buffer[offset + 12] = static_cast<double>(stats.tankClass);
-    buffer[offset + 13] = stats.upgradeChoices;
+    buffer[offset + 5] = stats.enemyDamageDealt;
+    buffer[offset + 6] = stats.damageTaken;
+    buffer[offset + 7] = static_cast<double>(stats.shotsFired);
+    buffer[offset + 8] = static_cast<double>(stats.shotsHit);
+    buffer[offset + 9] = static_cast<double>(stats.enemyKills);
+    buffer[offset + 10] = static_cast<double>(stats.farmKills);
+    buffer[offset + 11] = static_cast<double>(stats.deathCount);
+    buffer[offset + 12] = static_cast<double>(static_cast<int>(stats.deathCause));
+    buffer[offset + 13] = static_cast<double>(stats.levelReached);
+    buffer[offset + 14] = static_cast<double>(stats.tankClass);
+    buffer[offset + 15] = stats.upgradeChoices;
   }
   return required;
 }

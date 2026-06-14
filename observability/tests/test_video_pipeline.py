@@ -37,3 +37,31 @@ def test_video_writer_drops_frames_when_queue_is_full(tmp_path):
         stats = writer.close()
     assert any(result is False for result in results) or stats.dropped_frames > 0
     assert output.exists()
+
+from pathlib import Path
+
+from observability.config import ObservabilityConfig
+from observability.video.eval_video import maybe_write_eval_video
+
+
+class AlwaysFallbackAlgorithm:
+    def compute_single_action(self, *args, **kwargs):
+        raise RuntimeError("force sampled fallback")
+
+
+def test_forced_eval_video_interval_smoke_under_wandb_root(tmp_path: Path):
+    runs_root = tmp_path / "training_data" / "W&B"
+    config = ObservabilityConfig(
+        run_id="forced-video",
+        runs_root=runs_root,
+        video_interval_iterations=1,
+        eval_max_steps=1,
+        eval_env_config={"agents": 20, "max_ticks": 8, "seed": 3},
+    )
+    result = maybe_write_eval_video(AlwaysFallbackAlgorithm(), config, iteration=1)
+    assert result is not None
+    assert result.path == runs_root / "forced-video" / "eval" / "1" / "eval.mp4"
+    assert result.path.exists()
+    assert result.path.stat().st_size > 0
+    assert result.elapsed_seconds >= 0.0
+    assert result.used_policy_fallback is True

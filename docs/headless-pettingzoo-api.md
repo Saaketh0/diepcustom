@@ -82,7 +82,7 @@ env = DiepCustomParallelEnv(
 )
 ```
 
-`observation_mode='combat'` returns the combat-specific dictionary used by the SB3 testing harness:
+`observation_mode='combat'` returns the combat-specific dictionary used by RLlib training:
 
 ```text
 grid_obs: (18, 21, 21) float32
@@ -91,7 +91,7 @@ prev_action_obs: (5,) float32
 tank_type_obs: scalar integer tank enum ID
 ```
 
-This mode is the intended policy-facing observation for combat training. It is wired through both the PettingZoo env and the Gymnasium/SB3 adapters. The default single-agent smoke trainer is `RL_testing/train_recurrent_ppo.py`, while the multi-agent dummy-bot harness lives under `RL_testing/SB3_test/`.
+This mode is the intended policy-facing observation for combat training. It is wired through `DiepCustomParallelEnv` and the RLlib stack in `RL_testing/ray_code.py`.
 
 ## Example
 
@@ -114,43 +114,43 @@ observations, rewards, terminations, truncations, infos = env.step({
 
 PettingZoo and Gymnasium are optional runtime dependencies. If installed, the wrapper subclasses `pettingzoo.ParallelEnv` and uses Gymnasium spaces. Without them, the same local API remains importable for conformance tests.
 
-## SB3 testing quickstart
+## RLlib training quickstart
 
-Install the RL testing extras into your virtualenv:
+Install RL testing dependencies into a **Python 3.12** virtualenv (see `pyproject.toml`):
 
 ```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r RL_testing/requirements.txt
 ```
 
-Single-agent smoke training against the built-in one-agent Gym adapter:
+Start Redis, seed the ghost league once, then launch training:
 
 ```bash
-.venv/bin/python RL_testing/train_recurrent_ppo.py --timesteps 1024
+cd RL_testing
+./start_redis.sh
+PYTHONPATH=.. .venv/bin/python -m league_initialization.seed_league_cache
+PYTHONPATH=.. .venv/bin/python ray_code.py
 ```
 
-Combat training against hardcoded random dummy bots with automatic save/resume:
+Resume after an interruption (requires Redis + league SSD from the same run):
 
 ```bash
-.venv/bin/python RL_testing/SB3_test/train_rppo_vs_dummy_bots.py \
-  --timesteps 4096 \
-  --output RL_testing/SB3_test/models/rppo_combat_dummy_bots
+PYTHONPATH=.. .venv/bin/python resume_from_checkpoint.py
 ```
 
-If `RL_testing/SB3_test/models/rppo_combat_dummy_bots.zip` already exists, the trainer resumes from that checkpoint by default. Add `--no-resume` to force a fresh run. Periodic checkpoints are written under `RL_testing/SB3_test/models/<name>_checkpoints/`.
+RLlib checkpoints are written every 5 iterations under `diepcustom/training_data/RLlib/`.
 
-Evaluate a saved recurrent policy against the same dummy bots:
+## League persistence (ghost opponents)
 
-```bash
-.venv/bin/python RL_testing/SB3_test/play_saved_model.py \
-  --model RL_testing/SB3_test/models/rppo_combat_dummy_bots.zip \
-  --episodes 3
-```
+Historical opponent weights are stored separately from RLlib checkpoints. See [RL_testing/ghost_model.md](../RL_testing/ghost_model.md) for the full architecture.
 
-For a narrower smoke check, run:
+| Track | Location | Purpose |
+|-------|----------|---------|
+| League (lean) | Redis + `training_data/redis/` | Ghost weight sampling |
+| RLlib (bulky) | `training_data/RLlib/` | Training resume |
 
-```bash
-.venv/bin/python RL_testing/SB3_test/random_dummy_bots_smoke.py
-```
+Both tracks must be restored together on resume. League data is seeded once via `league_initialization.seed_league_cache` and updated every training iteration by `LeagueBootstrapCallback`.
 
 ## Fast tickless training path
 

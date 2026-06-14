@@ -11,7 +11,7 @@ namespace diepcustom::headless {
 
 inline constexpr int HeadlessStatCount = 8;
 inline constexpr int HeadlessNoUpgradeChoice = -1;
-inline constexpr int EpisodeStatsFieldCount = 14;
+inline constexpr int EpisodeStatsFieldCount = 16;
 
 enum class DeathCause : int {
   None = 0,
@@ -27,10 +27,12 @@ struct EpisodeStats {
   double scoreFromFarming = 0;
   double scoreFromPvp = 0;
   double damageDealt = 0;
+  double enemyDamageDealt = 0;
   double damageTaken = 0;
   int shotsFired = 0;
   int shotsHit = 0;
-  int kills = 0;
+  int enemyKills = 0;
+  int farmKills = 0;
   int deathCount = 0;
   DeathCause deathCause = DeathCause::None;
   int levelReached = 1;
@@ -211,13 +213,36 @@ private:
     std::vector<BarrelSnapshot> barrels;
   };
 
+  struct TrainingScenarioConfig {
+    bool enabled = false;
+    double arenaSize = 2000;
+    int targetShapes = 0;
+  };
+
+  struct TrainingSpawnPoint {
+    double x = 0;
+    double y = 0;
+  };
+
   void initializeWorld();
+  TrainingScenarioConfig trainingScenarioConfig() const;
+  bool isTrainingScenario() const;
+  void configureTrainingArena(const TrainingScenarioConfig& scenario);
   void spawnAgent(int index);
+  void spawnTrainingAgent(int index, const TrainingScenarioConfig& scenario);
   void spawnShape(int index);
   void spawnShape(int index, const std::string& shapeKind);
   void spawnShapeAt(int index, const std::string& shapeKind, double x, double y);
   void configureShape(Entity& entity, const std::string& shapeKind);
   void spawnManagedShape(int index);
+  void spawnInitialTrainingShapes(const TrainingScenarioConfig& scenario);
+  void maintainTrainingShapePopulation(const TrainingScenarioConfig& scenario);
+  bool spawnTrainingShapeInBlankSpot(int index, const TrainingScenarioConfig& scenario, int maxAttempts);
+  int countLiveTrainingShapes() const;
+  std::string randomTrainingShapeKind(const TrainingScenarioConfig& scenario);
+  TrainingSpawnPoint randomTrainingShapePoint(const TrainingScenarioConfig& scenario, const std::string& shapeKind);
+  bool isInsideTrainingSpawnBounds(double x, double y, double radius) const;
+  bool overlapsPhysicalEntities(double x, double y, double radius, double extraClearance, bool includeProjectiles) const;
   Entity* findEntity(int id);
   const Entity* findEntity(int id) const;
   void applyBasicAi();
@@ -245,7 +270,7 @@ private:
   void syncEpisodeStatsFromLiveAgents();
   void recordShotFired(const Entity& owner);
   void recordShotHit(const Entity& source);
-  void recordDamageDealt(const Entity& source, double amount);
+  void recordDamageDealt(const Entity& source, const Entity& target, double amount);
   void recordDamageTaken(const Entity& target, double amount);
   void recordKill(const Entity& source, const Entity& target);
   void recordScoreReward(const Entity& source, const Entity& target);

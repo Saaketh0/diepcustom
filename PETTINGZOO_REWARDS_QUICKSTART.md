@@ -1,5 +1,7 @@
 # PettingZoo RL Quickstart (Python Only)
 
+Requires **Python 3.12+** (`diepcustom/pyproject.toml`). Older interpreters fail on modern type syntax in `RL_training/` (for example `tuple[int, ...] | None`).
+
 Use the root `RL_training/` package for Python-side agents, rewards, and PettingZoo training.
 You should not need to browse C++ or conformance internals for normal reward experiments.
 
@@ -78,7 +80,24 @@ Debug components with: `infos[agent]['reward_components']`.
 
 Only `observation_mode='combat'` is supported.
 
-It returns `{'grid_obs': ..., 'self_obs': ..., 'prev_action_obs': ...}` and is the policy-facing observation used by the current SB3 combat harnesses.
+It returns `{'grid_obs': ..., 'self_obs': ..., 'prev_action_obs': ...}` and is the policy-facing observation used by the RLlib combat training stack.
+
+## RLlib training
+
+Production training uses Ray RLlib PPO in `RL_testing/ray_code.py` (20 agents: 4 mains + 16 ghosts). See:
+
+- [RL_testing/ghost_model.md](./RL_testing/ghost_model.md) — league loop, Redis/SSD persistence, resume requirements
+- [docs/headless-pettingzoo-api.md](./docs/headless-pettingzoo-api.md) — RLlib quickstart commands
+
+```bash
+cd RL_testing
+./start_redis.sh
+PYTHONPATH=.. python -m league_initialization.seed_league_cache   # first time
+PYTHONPATH=.. python ray_code.py
+PYTHONPATH=.. python resume_from_checkpoint.py
+```
+
+Training data persists under `diepcustom/training_data/` (league weights in `redis/`, RLlib checkpoints in `RLlib/`).
 
 ## Fast training defaults
 
@@ -86,6 +105,8 @@ It returns `{'grid_obs': ..., 'self_obs': ..., 'prev_action_obs': ...}` and is t
 DiepCustomParallelEnv(
     observation_mode='combat',
     include_snapshot_info=False,
+    fast_reward_state=True,  # used by ray_code.py DIEP_ENV_CONFIG
+    reward_config={'score_delta': 1.0, 'alive': 0.01, 'death': -1.0},
 )
 ```
 
@@ -94,6 +115,8 @@ DiepCustomParallelEnv(
 `conformance/headless/python_pettingzoo_smoke.py`: quick env/reward check.
 
 `conformance/headless/python_pettingzoo_api_test.py`: PettingZoo `parallel_api_test` compliance.
+
+`conformance/headless/python_gym_combat_wrapper_smoke.py`: combat env smoke without external RL frameworks.
 
 `conformance/headless/python_training_benchmark.py`: Python training throughput benchmark.
 

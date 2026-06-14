@@ -10,26 +10,32 @@ from dataclasses import dataclass, field
 NO_UPGRADE = -1
 STAT_COUNT = 8
 TANK_UPGRADE_SLOT_COUNT = 6
+# Stat indices from src/Const/Enums.ts: BulletDamage, Reload (firerate), BulletPenetration.
+PRIMARY_COMBAT_STAT_ORDER = (2, 1, 3)
 
 PRESET_BUILDS = {
     'predator': {
         'display_name': 'Predator',
-        'stat_targets': (0, 0, 0, 7, 7, 7, 7, 5),
+        'stat_targets': (0, 7, 7, 7, 7, 7, 7, 5),
+        'stat_order': PRIMARY_COMBAT_STAT_ORDER,
         'tank_upgrade_map': {0: (1,), 6: (2,), 19: (0,)},
     },
     'pentashot': {
         'display_name': 'Penta Shot',
-        'stat_targets': (0, 0, 0, 7, 7, 7, 7, 5),
+        'stat_targets': (0, 7, 7, 7, 7, 7, 7, 5),
+        'stat_order': PRIMARY_COMBAT_STAT_ORDER,
         'tank_upgrade_map': {0: (0,), 1: (0,), 3: (1,)},
     },
     'fighter': {
         'display_name': 'Fighter',
-        'stat_targets': (0, 2, 3, 0, 7, 7, 7, 7),
+        'stat_targets': (0, 7, 7, 7, 7, 7, 7, 7),
+        'stat_order': PRIMARY_COMBAT_STAT_ORDER,
         'tank_upgrade_map': {0: (3,), 8: (0,), 9: (1,)},
     },
     'annihilator': {
         'display_name': 'Annihilator',
-        'stat_targets': (0, 2, 3, 7, 7, 7, 0, 7),
+        'stat_targets': (0, 7, 7, 7, 7, 7, 0, 7),
+        'stat_order': PRIMARY_COMBAT_STAT_ORDER,
         'tank_upgrade_map': {0: (2,), 7: (0,), 10: (1,)},
     },
 }
@@ -59,6 +65,16 @@ def first_legal_choice(mask, preferred_order, valid_count):
         if _mask_value(mask, index) > 0.0:
             return index
     return NO_UPGRADE
+
+
+def preset_stat_order(stat_targets, preferred_first=()):
+    preferred = _normalized_order(preferred_first, STAT_COUNT)
+    preferred_set = set(preferred)
+    remaining = sorted(
+        (index for index in range(STAT_COUNT) if index not in preferred_set),
+        key=lambda index: (-int(stat_targets[index]), index),
+    )
+    return tuple(preferred + remaining)
 
 
 def stat_choice_for_targets(progression, stat_targets, preferred_order):
@@ -161,7 +177,7 @@ def preset_auto_upgrade_policy(name, *, prefer_tank_upgrade=False):
         supported = ', '.join(sorted(PRESET_BUILDS))
         raise ValueError(f'unknown preset {name!r}; expected one of: {supported}') from exc
     stat_targets = tuple(int(value) for value in preset['stat_targets'])
-    stat_order = tuple(sorted(range(STAT_COUNT), key=lambda index: (-stat_targets[index], index)))
+    stat_order = preset_stat_order(stat_targets, preset.get('stat_order', ()))
     return AutoUpgradePolicy(
         stat_order=stat_order,
         stat_targets=stat_targets,
@@ -175,7 +191,9 @@ __all__ = [
     'STAT_COUNT',
     'TANK_UPGRADE_SLOT_COUNT',
     'PRESET_BUILDS',
+    'PRIMARY_COMBAT_STAT_ORDER',
     'first_legal_choice',
+    'preset_stat_order',
     'stat_choice_for_targets',
     'AutoUpgradePolicy',
     'apply_auto_upgrades',

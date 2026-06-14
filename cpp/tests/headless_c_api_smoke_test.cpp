@@ -7,21 +7,22 @@
 #include <vector>
 
 namespace {
-constexpr int EpisodeStatsFieldCount = 14;
+constexpr int EpisodeStatsFieldCount = 16;
 constexpr int CombatChannelCount = 18;
 constexpr int LifetimeStepsIndex = 0;
-constexpr int ShotsFiredIndex = 6;
 constexpr int DamageDealtIndex = 4;
-constexpr int DamageTakenIndex = 5;
-constexpr int DeathCountIndex = 9;
-constexpr int DeathCauseIndex = 10;
-constexpr int LevelReachedIndex = 11;
-constexpr int TankClassIndex = 12;
-constexpr int UpgradeChoicesIndex = 13;
+constexpr int EnemyDamageDealtIndex = 5;
+constexpr int DamageTakenIndex = 6;
+constexpr int ShotsFiredIndex = 7;
+constexpr int DeathCountIndex = 11;
+constexpr int DeathCauseIndex = 12;
+constexpr int LevelReachedIndex = 13;
+constexpr int TankClassIndex = 14;
+constexpr int UpgradeChoicesIndex = 15;
 }
 
 int main() {
-  assert(diep_abi_version() == 10);
+  assert(diep_abi_version() == 12);
   const auto combatShape = diep_get_combat_observation_shape();
   assert(combatShape.channels == CombatChannelCount && combatShape.rows == 21 && combatShape.cols == 21 && combatShape.layout == DIEP_LAYOUT_CHANNEL_FIRST);
   const auto actionShape = diep_get_action_shape();
@@ -158,6 +159,7 @@ int main() {
     const std::size_t offset = static_cast<std::size_t>(i * EpisodeStatsFieldCount);
     deathCountSum += denseStats[offset + DeathCountIndex];
     damageDealtSum += denseStats[offset + DamageDealtIndex];
+    assert(denseStats[offset + EnemyDamageDealtIndex] > 0.0);
     damageTakenSum += denseStats[offset + DamageTakenIndex];
     assert(denseStats[offset + DeathCauseIndex] == 0.0 || denseStats[offset + DeathCauseIndex] == 2.0);
   }

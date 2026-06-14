@@ -3,8 +3,22 @@
 import torch
 import torch.nn as nn
 
-from ray.rllib.core import Columns
-from ray.rllib.core.rl_module.torch import TorchRLModule
+try:
+    from ray.rllib.core import Columns
+    from ray.rllib.core.rl_module.torch import TorchRLModule
+except ImportError:
+    class Columns:
+        OBS = "obs"
+
+    class TorchRLModule(nn.Module):
+        """Tiny local fallback so the encoder can be imported without RLlib."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.setup()
+
+        def forward_train(self, batch, **kwargs):
+            return self._forward(batch, **kwargs)
 
 
 TANK_TYPE_COUNT = 57
@@ -40,13 +54,16 @@ class BasicCombatCNN(TorchRLModule):
 
         self.experts = nn.ModuleDict({
             name: nn.Sequential(
-                nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                nn.Conv2d(32, 16, kernel_size=3, padding=1),
                 nn.ReLU(),
-                nn.Flatten(),
             )
             for name in EXPERT_NAMES
         })
 
+        self.output = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(7056,256)
+        )
         self.register_buffer("expert_routes", _expert_route_table(), persistent=False)
 
     def _get_grid(self, batch):
@@ -72,12 +89,12 @@ class BasicCombatCNN(TorchRLModule):
         )
 
     def _expert_features(self, trunk_features, routes):
-        output = trunk_features.new_empty((trunk_features.shape[0], 64, trunk_features.shape[2], trunk_features.shape[3]))
+        output = trunk_features.new_empty((trunk_features.shape[0], 16, trunk_features.shape[2], trunk_features.shape[3]))
         for expert_name, expert in self.experts.items():
             mask = routes == EXPERT_INDEX[expert_name]
             if torch.any(mask):
                 output[mask] = expert(trunk_features[mask])
-        return output
+        return self.output(output)
 
     def _forward(self, batch, **kwargs):
         grid = self._get_grid(batch)

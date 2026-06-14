@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from observability.core.stats_bridge import EpisodeStatsSummary
 from RL_training.headless import ABI_VERSION, EPISODE_STATS_FIELDS, DiepAction, HeadlessSim, abi_version, episode_stats_shape
 
 
 def test_episode_stats_shape_matches_abi():
-    assert ABI_VERSION == 10
-    assert abi_version() == 10
+    assert ABI_VERSION == 12
+    assert abi_version() == 12
     shape = episode_stats_shape()
-    assert shape['fields'] == len(EPISODE_STATS_FIELDS) == 14
+    assert shape['fields'] == len(EPISODE_STATS_FIELDS) == 16
     assert shape['field_names'] == EPISODE_STATS_FIELDS
 
 
@@ -15,15 +16,16 @@ def test_episode_stats_reset_and_shots_fired():
     with HeadlessSim(seed=123, agents=1, max_ticks=8, scenario='rl-grid-smoke') as sim:
         initial = sim.episode_stats_array()
         assert initial.shape == (1, len(EPISODE_STATS_FIELDS))
-        assert float(initial[0, 6]) == 0.0
+        shots_fired_index = EPISODE_STATS_FIELDS.index('shots_fired')
+        assert float(initial[0, shots_fired_index]) == 0.0
         sim.step([DiepAction(0, 1.0, 0.0, 1.0, 0.0, 1, 0, -1, -1)])
         after_fire = sim.episode_stats_array()
         assert float(after_fire[0, 0]) == 1.0
-        assert float(after_fire[0, 6]) == 1.0
+        assert float(after_fire[0, shots_fired_index]) == 1.0
         sim.reset(123)
         reset = sim.episode_stats_array()
         assert float(reset[0, 0]) == 0.0
-        assert float(reset[0, 6]) == 0.0
+        assert float(reset[0, shots_fired_index]) == 0.0
 
 
 def test_episode_stats_damage_death_and_sim_isolation():
@@ -33,9 +35,44 @@ def test_episode_stats_damage_death_and_sim_isolation():
         dense_a.step_many(idle, 10)
         stats_a = dense_a.episode_stats_array()
         stats_b = dense_b.episode_stats_array()
-        assert float(stats_a[:, 9].sum()) == 4.0
-        assert float(stats_a[:, 4].sum()) > 0.0
-        assert float(stats_a[:, 5].sum()) > 0.0
-        assert float(stats_b[:, 9].sum()) == 0.0
-        assert float(stats_b[:, 4].sum()) == 0.0
-        assert float(stats_b[:, 5].sum()) == 0.0
+        enemy_kills_index = EPISODE_STATS_FIELDS.index('enemy_kills')
+        damage_dealt_index = EPISODE_STATS_FIELDS.index('damage_dealt')
+        enemy_damage_dealt_index = EPISODE_STATS_FIELDS.index('enemy_damage_dealt')
+        assert float(stats_a[:, enemy_kills_index].sum()) == 4.0
+        assert float(stats_a[:, damage_dealt_index].sum()) > 0.0
+        assert float(stats_a[:, enemy_damage_dealt_index].sum()) > 0.0
+        assert float(stats_b[:, enemy_kills_index].sum()) == 0.0
+        assert float(stats_b[:, damage_dealt_index].sum()) == 0.0
+        assert float(stats_b[:, enemy_damage_dealt_index].sum()) == 0.0
+
+
+def test_episode_stats_summary_matches_current_fields():
+    row = [0.0] * len(EPISODE_STATS_FIELDS)
+    values = dict(zip(EPISODE_STATS_FIELDS, row))
+    values.update(
+        {
+            'lifetime_steps': 12.0,
+            'score_total': 100.0,
+            'score_from_farming': 30.0,
+            'score_from_pvp': 70.0,
+            'damage_dealt': 11.0,
+            'enemy_damage_dealt': 8.0,
+            'damage_taken': 4.0,
+            'shots_fired': 10.0,
+            'shots_hit': 3.0,
+            'enemy_kills': 2.0,
+            'farm_kills': 5.0,
+            'level_reached': 9.0,
+        }
+    )
+    summary = EpisodeStatsSummary.from_row(
+        [values[field] for field in EPISODE_STATS_FIELDS],
+        episode_id='episode',
+        controlled_agent='agent_0',
+        episode_length=12,
+        total_reward=1.5,
+    )
+    assert summary.enemy_damage_dealt == 8.0
+    assert summary.enemy_kills == 2
+    assert summary.farm_kills == 5
+    assert summary.hit_rate == 0.3

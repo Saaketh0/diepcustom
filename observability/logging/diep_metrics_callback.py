@@ -12,23 +12,22 @@ from observability.core.metrics_schema import build_episode_payload
 from observability.core.stats_bridge import EpisodeStatsSummary
 from observability.logging.wandb_logger import WandbLogger
 
-try:
-    from stable_baselines3.common.callbacks import BaseCallback
-except ImportError:  # pragma: no cover - enables lightweight unit tests outside .venv
-    class BaseCallback:  # type: ignore
-        def __init__(self, verbose: int = 0):
-            self.verbose = verbose
-            self.locals: dict[str, Any] = {}
-            self.num_timesteps = 0
-            self.training_env = None
-            self.model = None
 
+class DiepMetricsCallback:
+    """Episode metrics collector for training runs (W&B / JSONL).
 
-class DiepMetricsCallback(BaseCallback):
+    Historically wired through Stable-Baselines3; now a framework-agnostic helper
+    intended for future RLlib callback integration.
+    """
+
     def __init__(self, observability: ObservabilityConfig, *, verbose: int = 0):
-        super().__init__(verbose=verbose)
+        self.verbose = int(verbose)
         self.observability = observability
         self.logger_backend = WandbLogger(observability)
+        self.locals: dict[str, Any] = {}
+        self.num_timesteps = 0
+        self.training_env = None
+        self.model = None
         self._episode_index = 0
         self._episode_started_at = time.perf_counter()
         self._reward_sums: dict[str, dict[str, float]] = defaultdict(lambda: {field: 0.0 for field in REWARD_FIELDS})
@@ -146,6 +145,8 @@ class DiepMetricsCallback(BaseCallback):
 
     def _base_env(self) -> Any:
         env = getattr(self, 'training_env', None)
+        if env is None and self.model is not None and hasattr(self.model, 'get_env'):
+            env = self.model.get_env()
         if env is None:
             raise RuntimeError('training_env is not attached')
         if hasattr(env, 'envs') and env.envs:

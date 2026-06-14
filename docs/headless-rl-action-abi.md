@@ -1,4 +1,4 @@
-# Headless RL ABI (v1-v8)
+# Headless RL ABI (v1-v10)
 
 ## Multi-agent action layout
 One `diep_action` struct is supplied per controlled agent each step. The simulator accepts sparse action arrays: omitted live agents become explicit no-op actions for that step.
@@ -18,9 +18,9 @@ Upgrade legality behavior:
 - tank upgrades require a legal slot on the current tank and the target tank's level requirement
 
 C ABI metadata:
-- `diep_abi_version()` returns the current ABI version (`8`).
+- `diep_abi_version()` returns the current ABI version (`10`).
 - `diep_get_action_shape()` returns the current action struct layout metadata.
-- `diep_get_combat_observation_shape()` returns `17 x 21 x 21`, channel-first.
+- `diep_get_combat_observation_shape()` returns `18 x 21 x 21`, channel-first.
 - `diep_agent_ids()` returns the current live agent id list or the required buffer length.
 - `diep_last_error()` reports the last per-handle error code.
 
@@ -96,3 +96,17 @@ C ABI calls:
 - `diep_agent_progressions(sim, buffer, buffer_len)` writes all possible-agent progression rows.
 
 This keeps the lower-level reward/progression ABI stable while letting Python combat training code inspect explicit legal stat/tank choices for RL agents.
+
+## ABI v9-v10 episode stats buffer
+
+ABI v9 added per-agent episode counters for observability and logging. Current ABI version is **10** (`diep_abi_version()`).
+
+```text
+(max_possible_agents, 14) float64
+```
+
+C ABI calls:
+- `diep_episode_stats_fields()` returns `14`.
+- `diep_episode_stats(sim, buffer, buffer_len)` writes all possible-agent episode stat rows.
+
+Used by `observability/core/stats_bridge.py` and planned `DiepMetricsCallback` RLlib integration. Episode stats are optional in the training hot loop; enable when logging overhead is acceptable.

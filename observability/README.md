@@ -9,7 +9,7 @@ Observability for headless DiepCustom RL training. **Two deliverables, one stats
 
 Training stays fast: only cheap C++ counters run every step. Video never runs inside the training hot loop.
 
-**Stack context:** C++ sim → ctypes C ABI → PettingZoo → SB3 RecurrentPPO (`RL_testing/SB3_test/`). This package extends that stack; it does not replace the sim.
+**Stack context:** C++ sim → ctypes C ABI → PettingZoo → Ray RLlib (`RL_testing/ray_code.py`). This package extends that stack; it does not replace the sim.
 
 ---
 
@@ -51,7 +51,7 @@ diepcustom/observability/
 
   logging/
     wandb_logger.py         # wandb init, scalar helpers (local-first)
-    diep_metrics_callback.py  # SB3 BaseCallback — main training integration
+    diep_metrics_callback.py  # episode metrics collector (future RLlib callback integration)
 
   video/
     render_grid_obs.py      # grid_obs channel composites
@@ -77,14 +77,15 @@ diepcustom/observability/
 
 | Path | Role |
 | --- | --- |
-| `diepcustom/cpp/` | `EpisodeStats` counters + C ABI export (ABI v9) |
+| `diepcustom/cpp/` | `EpisodeStats` counters + C ABI export (current ABI v10) |
 | `diepcustom/RL_training/headless.py` | ctypes + `episode_stats_array()` |
 | `diepcustom/RL_training/pettingzoo_env.py` | Combat obs; optional `enable_episode_stats` later |
 | `diepcustom/RL_training/observations/combat.py` | Schema source of truth for `grid_obs` channels |
-| `diepcustom/RL_testing/SB3_test/train_rppo_vs_dummy_bots.py` | Wires `DiepMetricsCallback` |
-| `diepcustom/RL_testing/SB3_test/eval_with_visuals.py` | **Planned** — video pipeline entry point |
+| `diepcustom/RL_testing/ray_code.py` | RLlib PPO training entry (future `DiepMetricsCallback` wiring) |
+| `diepcustom/RL_testing/ghost_model.md` | Ghost league loop, Redis/SSD persistence, resume requirements |
+| `diepcustom/observability/` | Eval video pipeline entry point (planned) |
 
-**Imports** (add `diepcustom/` to `PYTHONPATH`, already done in SB3_test scripts):
+**Imports** (add `diepcustom/` to `PYTHONPATH`):
 
 ```python
 from observability.config import ObservabilityConfig
@@ -117,7 +118,7 @@ Per-agent combat counters updated inside the C++ sim hot loop. One ABI read per 
 
 **Hook points in `headless.cpp`:** `fireProjectile`, `receiveDamage`, kill branch, `tryApplyStatUpgrade`, `tryApplyTankUpgradeSlot`.
 
-**ABI:** bump v8 → v9; add `diep_episode_stats_fields()` and `diep_episode_stats(sim, buf, len)`.
+**ABI:** current `diep_abi_version()` is **10**; episode stats use `diep_episode_stats_fields()` and `diep_episode_stats(sim, buf, len)`.
 
 ### Python `EpisodeStatsSummary`
 
@@ -149,8 +150,8 @@ Reads `episode_stats_array()` on episode end (via `env.unwrapped._sim` or `info[
 | --- | --- |
 | `train/episode_reward` | Callback rollout sum |
 | `train/episode_length` | Steps this episode |
-| `train/policy_entropy` | SB3 logger |
-| `train/explained_variance` | SB3 logger |
+| `train/policy_entropy` | trainer logger (when attached) |
+| `train/explained_variance` | trainer logger (when attached) |
 
 **Combat** (from `EpisodeStats`)
 
@@ -196,9 +197,9 @@ When `--no-wandb`, append one JSON object per episode to `runs/<run_id>/episodes
 
 C++ maintains counters for **all** slots; Python filters at flush time by `stats_log_agents`.
 
-### Episode boundary (SB3 dummy-bots harness)
+### Episode boundary
 
-Flush stats when the **controlled agent** `terminated` or `truncated`, or on `reset()`. Global C++ `done` (all dead or max ticks) is not the only signal — learner death ends the SB3 episode while other bots may still be alive.
+Flush stats when the **controlled agent** `terminated` or `truncated`, or on `reset()`. Global C++ `done` (all dead or max ticks) is not the only signal — learner death can end the logged episode while other agents may still be alive.
 
 ---
 
@@ -210,7 +211,7 @@ Make stats and perception **visible** for one episode. Primary human debug tool;
 
 ### Entry point
 
-`RL_testing/SB3_test/eval_with_visuals.py` — loads a saved checkpoint, runs N eval episodes, writes MP4 + JSON. **Not imported by the training script.**
+Eval video script (planned) — loads a saved RLlib checkpoint, runs N eval episodes, writes MP4 + JSON. **Not wired into training yet.**
 
 ### Frame content
 
@@ -243,7 +244,7 @@ Upload `eval.mp4` to W&B as `gameplay/eval_video` when W&B is enabled.
 
 ## Reward function optimization workflow
 
-This plan is designed for iterating on `reward_config` (see `DEFAULT_REWARD_CONFIG` in `sb3_single_agent_env.py`).
+This plan is designed for iterating on `reward_config` (see `RL_training/rewards.py` and `DiepCustomParallelEnv`).
 
 ```text
 1. Set reward_config on env
@@ -263,7 +264,7 @@ This plan is designed for iterating on `reward_config` (see `DEFAULT_REWARD_CONF
 
 ## Combat observation (shared with policy)
 
-Video overlays and future health checks use the **same** combat dict as SB3 `MultiInputLstmPolicy`:
+Video overlays and future health checks use the **same** combat dict as the RLlib `DiepPolicy` encoder:
 
 | Key | Shape | Notes |
 | --- | --- | --- |
@@ -303,7 +304,7 @@ Guardrails for Milestones A–C. Read this before touching C++ counters, the cal
 
 ### Parallel environments (VecEnv)
 
-**Today:** training uses a **single** `CombatSB3DummyBotsEnv` — no `SubprocVecEnv` or `DummyVecEnv`. Concurrent multi-env corruption is not an active risk yet.
+**Today:** RLlib training uses parallel env runners; observability must remain episode-boundary safe under concurrency.
 
 **When vectorizing**, each sub-environment must own an isolated C++ handle:
 
@@ -420,13 +421,18 @@ Deferred (separate PRs, not blocking MVP):
 cd diepcustom
 npm run test:cpp
 .venv/bin/python conformance/headless/python_training_benchmark.py
-.venv/bin/python RL_testing/SB3_test/train_rppo_vs_dummy_bots.py \
-  --timesteps 4096 --no-resume
+cd RL_testing && ./start_redis.sh
+PYTHONPATH=.. .venv/bin/python -m league_initialization.seed_league_cache   # first time only
+PYTHONPATH=.. .venv/bin/python ray_code.py
 ```
 
-Record results in `observability/runs/benchmarks.md` (date, git SHA, ticks/sec, SB3 wall-clock).
+Before `ray_code.py`, start Redis (`RL_testing/start_redis.sh`) and seed the ghost league once. See [RL_testing/ghost_model.md](../RL_testing/ghost_model.md).
+
+Record results in `observability/runs/benchmarks.md` (date, git SHA, ticks/sec, training wall-clock).
 
 ### Dependencies
+
+Use a **Python 3.12** virtualenv with `RL_testing/requirements.txt` installed first, then:
 
 ```bash
 .venv/bin/python -m pip install -r observability/requirements-extras.txt
@@ -441,7 +447,7 @@ MVP: `wandb`, `pytest`. After Milestone C: uncomment `opencv-python`, `imageio`,
 | Topic | Decision |
 | --- | --- |
 | Package path | `diepcustom/observability/` |
-| Action obs | Keep `prev_action_obs` for SB3; add `applied_action_obs` alias when Milestone D lands |
+| Action obs | Keep `prev_action_obs` for RLlib; add `applied_action_obs` alias when Milestone D lands |
 | Env hook | Optional later (`enable_episode_stats`); v1 callback reads `_sim` directly |
 | Traces | No full step traces in MVP; video + episode summary instead |
 | pybind11 | Only if zero-copy ctypes misses **≥ 20%** env FPS on observation benchmark |

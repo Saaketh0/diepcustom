@@ -1,21 +1,112 @@
-#include "diepcustom/headless.hpp"
-
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <vector>
+
+#define private public
+#include "diepcustom/headless.hpp"
+#undef private
 
 using diepcustom::headless::Action;
 using diepcustom::headless::Config;
 using diepcustom::headless::Simulation;
 
 namespace {
-constexpr int EpisodeStatsFieldCount = 14;
+constexpr int EpisodeStatsFieldCount = 16;
 constexpr int CombatChannelCount = 18;
-constexpr int ShotsFiredIndex = 6;
-constexpr int DeathCountIndex = 9;
-constexpr int UpgradeChoicesIndex = 13;
+constexpr int DamageDealtIndex = 4;
+constexpr int EnemyDamageDealtIndex = 5;
+constexpr int ShotsFiredIndex = 7;
+constexpr int EnemyKillsIndex = 9;
+constexpr int FarmKillsIndex = 10;
+constexpr int DeathCountIndex = 11;
+constexpr int UpgradeChoicesIndex = 15;
+
+struct ParsedEntity {
+  std::string kind;
+  double x = 0;
+  double y = 0;
+  double size = 0;
+};
+
+double extractNumber(const std::string& json, const std::string& key) {
+  const std::regex pattern("\"" + key + "\":(-?[0-9]+(?:\\.[0-9]+)?)");
+  std::smatch match;
+  assert(std::regex_search(json, match, pattern));
+  return std::stod(match[1].str());
+}
+
+std::vector<ParsedEntity> parseEntities(const std::string& json) {
+  std::vector<ParsedEntity> entities;
+  const std::regex pattern("\\{\"id\":[0-9]+.*?\"kind\":\"([^\"]+)\".*?\"position\":\\{\"x\":(-?[0-9]+(?:\\.[0-9]+)?),\"y\":(-?[0-9]+(?:\\.[0-9]+)?),\"angle\":-?[0-9]+(?:\\.[0-9]+)?\\}.*?\"physics\":\\{\"sides\":[0-9]+,\"size\":(-?[0-9]+(?:\\.[0-9]+)?)");
+  for (std::sregex_iterator it(json.begin(), json.end(), pattern), end; it != end; ++it) {
+    entities.push_back(ParsedEntity{(*it)[1].str(), std::stod((*it)[2].str()), std::stod((*it)[3].str()), std::stod((*it)[4].str())});
+  }
+  return entities;
+}
+
+int countFarmables(const std::vector<ParsedEntity>& entities) {
+  return static_cast<int>(std::count_if(entities.begin(), entities.end(), [](const ParsedEntity& entity) {
+    return entity.kind == "shape" || entity.kind == "crasher";
+  }));
+}
+
+void assertNoAgentFarmableOverlap(const std::vector<ParsedEntity>& entities) {
+  for (const auto& agent : entities) {
+    if (agent.kind != "agent") continue;
+    for (const auto& farmable : entities) {
+      if (!(farmable.kind == "shape" || farmable.kind == "crasher")) continue;
+      const double dx = agent.x - farmable.x;
+      const double dy = agent.y - farmable.y;
+      const double minDistance = agent.size + farmable.size;
+      assert(dx * dx + dy * dy > minDistance * minDistance);
+    }
+  }
+}
+
+void assertTrainingScenario(const std::string& scenario, double arenaSize, int targetShapes) {
+  Simulation sim(Config{777, 8, 128, scenario});
+  const std::string snapshot = sim.fullWorldSnapshotJson();
+  assert(extractNumber(snapshot, "leftX") == -arenaSize * 0.5);
+  assert(extractNumber(snapshot, "rightX") == arenaSize * 0.5);
+  assert(extractNumber(snapshot, "topY") == -arenaSize * 0.5);
+  assert(extractNumber(snapshot, "bottomY") == arenaSize * 0.5);
+
+  const auto entities = parseEntities(snapshot);
+  assert(static_cast<int>(std::count_if(entities.begin(), entities.end(), [](const ParsedEntity& entity) { return entity.kind == "agent"; })) == 8);
+  assert(countFarmables(entities) >= targetShapes * 95 / 100);
+  assert(countFarmables(entities) <= targetShapes);
+  for (const auto& entity : entities) {
+    assert(entity.x >= -arenaSize * 0.5);
+    assert(entity.x <= arenaSize * 0.5);
+    assert(entity.y >= -arenaSize * 0.5);
+    assert(entity.y <= arenaSize * 0.5);
+  }
+  assertNoAgentFarmableOverlap(entities);
+
+  Simulation same(Config{777, 8, 128, scenario});
+  Simulation different(Config{778, 8, 128, scenario});
+  assert(snapshot == same.fullWorldSnapshotJson());
+  assert(snapshot != different.fullWorldSnapshotJson());
+
+  int removed = 0;
+  for (auto& entity : sim.entities_) {
+    if (entity.kind == "shape" || entity.kind == "crasher") {
+      entity.removed = true;
+      removed += 1;
+      if (removed == 40) break;
+    }
+  }
+  sim.cleanupEntities();
+  assert(sim.countLiveTrainingShapes() <= targetShapes - 40);
+  for (int i = 0; i < 8; ++i) sim.step({});
+  assert(sim.countLiveTrainingShapes() > targetShapes - 40);
+  assert(sim.countLiveTrainingShapes() <= targetShapes);
+}
 }
 
 std::string runScript(std::uint64_t seed, int ticks, const std::string& scenario) {
@@ -78,6 +169,34 @@ int main() {
   assert(grid.writeEpisodeStats(episodeStats.data(), EpisodeStatsFieldCount) == EpisodeStatsFieldCount);
   assert(episodeStats[ShotsFiredIndex] == 1.0);
 
+
+  Simulation killStats(Config{123, 1, 5, "rl-grid-smoke"});
+  Simulation::Entity source;
+  source.id = 0;
+  source.kind = "agent";
+  source.ownerId = -1;
+  Simulation::Entity farmTarget;
+  farmTarget.kind = "shape";
+  farmTarget.scoreReward = 25;
+  killStats.recordScoreReward(source, farmTarget);
+  Simulation::Entity projectileTarget;
+  projectileTarget.kind = "projectile";
+  projectileTarget.scoreReward = 0;
+  killStats.recordScoreReward(source, projectileTarget);
+  Simulation::Entity enemyTarget;
+  enemyTarget.kind = "agent";
+  enemyTarget.scoreReward = 100;
+  killStats.recordScoreReward(source, enemyTarget);
+  killStats.recordKill(source, enemyTarget);
+  killStats.recordDamageDealt(source, farmTarget, 5.0);
+  killStats.recordDamageDealt(source, enemyTarget, 7.0);
+  std::vector<double> killStatsValues(static_cast<std::size_t>(EpisodeStatsFieldCount), -1.0);
+  assert(killStats.writeEpisodeStats(killStatsValues.data(), EpisodeStatsFieldCount) == EpisodeStatsFieldCount);
+  assert(killStatsValues[EnemyKillsIndex] == 1.0);
+  assert(killStatsValues[FarmKillsIndex] == 1.0);
+  assert(killStatsValues[DamageDealtIndex] == 12.0);
+  assert(killStatsValues[EnemyDamageDealtIndex] == 7.0);
+
   Simulation upgrade(Config{123, 1, 8, "upgrade-ready"});
   std::vector<float> upgradeSelf(static_cast<std::size_t>(upgrade.combatSelfFloatCount()), -1.0f);
   assert(upgrade.writeCombatSelf(0, upgradeSelf.data(), upgrade.combatSelfFloatCount()) == upgrade.combatSelfFloatCount());
@@ -116,6 +235,10 @@ int main() {
   }
   assert(deathSumA == 4.0);
   assert(deathSumB == 0.0);
+
+  assertTrainingScenario("training-ffa-easy", 3200.0, 240);
+  assertTrainingScenario("training-ffa-medium", 4800.0, 400);
+  assertTrainingScenario("training-ffa-hard", 6400.0, 600);
 
   grid.reset(123);
   std::fill(episodeStats.begin(), episodeStats.end(), -1.0);

@@ -37,6 +37,7 @@ class WandbLogger:
         self._run = wandb.init(
             project=self.config.project_name,
             name=self.config.run_id,
+            group=self.config.wandb_group,
             dir=str(self.config.run_dir),
             mode=self.config.wandb_mode,
             config=self._config_payload,
