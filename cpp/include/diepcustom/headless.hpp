@@ -11,6 +11,35 @@ namespace diepcustom::headless {
 
 inline constexpr int HeadlessStatCount = 8;
 inline constexpr int HeadlessNoUpgradeChoice = -1;
+inline constexpr int EpisodeStatsFieldCount = 16;
+
+enum class DeathCause : int {
+  None = 0,
+  Projectile = 1,
+  Collision = 2,
+  Boundary = 3,
+  Unknown = 4,
+};
+
+struct EpisodeStats {
+  int lifetimeSteps = 0;
+  double scoreTotal = 0;
+  double scoreFromFarming = 0;
+  double scoreFromPvp = 0;
+  double damageDealt = 0;
+  double enemyDamageDealt = 0;
+  double damageTaken = 0;
+  int shotsFired = 0;
+  int shotsHit = 0;
+  int enemyKills = 0;
+  int farmKills = 0;
+  int deathCount = 0;
+  DeathCause deathCause = DeathCause::None;
+  int levelReached = 1;
+  int tankClass = 0;
+  double upgradeChoices = 0;
+  int tankUpgradeCount = 0;
+};
 
 struct Action {
   // V1 multi-agent action layout: one struct per controlled agent.
@@ -33,10 +62,12 @@ struct StepResult {
   bool done = false;
 };
 
-struct ObservationSpec {
+struct CombatObservationSpec {
+  int channels = 18;
   int rows = 21;
   int cols = 21;
-  int channels = 8;
+  int selfFields = 27;
+  int prevActionFields = 5;
   double cellSize = 100.0;
 };
 
@@ -70,19 +101,28 @@ public:
   StepResult stepMany(const std::vector<Action>& actions, int ticks);
   std::string fullWorldSnapshotJson() const;
   std::string finalReportJson(double elapsedMs) const;
-  int observationFloatCount() const;
-  int writeObservation(int agentId, float* buffer, int bufferLen) const;
-  int writeObservations(float* buffer, int bufferLen) const;
   int writeAliveMask(int* buffer, int bufferLen) const;
   int writeAgentIds(int* buffer, int bufferLen) const;
   int agentStateFloatCount() const;
   int writeAgentStates(float* buffer, int bufferLen) const;
   int agentProgressionFloatCount() const;
   int writeAgentProgressions(float* buffer, int bufferLen) const;
+  int combatGridFloatCount() const;
+  int writeCombatGrid(int agentId, float* buffer, int bufferLen) const;
+  int writeCombatGrids(float* buffer, int bufferLen) const;
+  int combatSelfFloatCount() const;
+  int writeCombatSelf(int agentId, float* buffer, int bufferLen) const;
+  int writeCombatSelves(float* buffer, int bufferLen) const;
+  int combatPrevActionFloatCount() const;
+  int writeCombatPrevAction(int agentId, float* buffer, int bufferLen) const;
+  int writeCombatPrevActions(float* buffer, int bufferLen) const;
+  int episodeStatsFieldCount() const;
+  int writeEpisodeStats(double* buffer, int bufferLen) const;
 
   int tick() const;
   int activeEntityCount() const;
   const Config& config() const;
+  const CombatObservationSpec& combatObservationSpec() const;
 
 private:
   struct Arena {
@@ -157,6 +197,7 @@ private:
     double baseSpeed = 0;
     double baseAccel = 0;
     int cooldown = 0;
+    int cooldownBase = 15;
     double scatterAngle = 0;
     int aiState = 0;
     int aiTargetId = -1;
@@ -165,17 +206,43 @@ private:
     double aiMoveX = 0;
     double aiMoveY = 0;
     int aiFlags = 0;
+    double recentDamageTaken = 0;
+    double recentDamageDirectionX = 0;
+    double recentDamageDirectionY = 0;
     std::array<int, HeadlessStatCount> statLevels{};
     std::vector<BarrelSnapshot> barrels;
   };
 
+  struct TrainingScenarioConfig {
+    bool enabled = false;
+    double arenaSize = 2000;
+    int targetShapes = 0;
+  };
+
+  struct TrainingSpawnPoint {
+    double x = 0;
+    double y = 0;
+  };
+
   void initializeWorld();
+  TrainingScenarioConfig trainingScenarioConfig() const;
+  bool isTrainingScenario() const;
+  void configureTrainingArena(const TrainingScenarioConfig& scenario);
   void spawnAgent(int index);
+  void spawnTrainingAgent(int index, const TrainingScenarioConfig& scenario);
   void spawnShape(int index);
   void spawnShape(int index, const std::string& shapeKind);
   void spawnShapeAt(int index, const std::string& shapeKind, double x, double y);
   void configureShape(Entity& entity, const std::string& shapeKind);
   void spawnManagedShape(int index);
+  void spawnInitialTrainingShapes(const TrainingScenarioConfig& scenario);
+  void maintainTrainingShapePopulation(const TrainingScenarioConfig& scenario);
+  bool spawnTrainingShapeInBlankSpot(int index, const TrainingScenarioConfig& scenario, int maxAttempts);
+  int countLiveTrainingShapes() const;
+  std::string randomTrainingShapeKind(const TrainingScenarioConfig& scenario);
+  TrainingSpawnPoint randomTrainingShapePoint(const TrainingScenarioConfig& scenario, const std::string& shapeKind);
+  bool isInsideTrainingSpawnBounds(double x, double y, double radius) const;
+  bool overlapsPhysicalEntities(double x, double y, double radius, double extraClearance, bool includeProjectiles) const;
   Entity* findEntity(int id);
   const Entity* findEntity(int id) const;
   void applyBasicAi();
@@ -196,16 +263,34 @@ private:
   void receiveDamage(Entity& target, Entity& source, double amount, StepResult& result);
   void keepInArena(Entity& entity) const;
   int agentIndexForId(int id) const;
-  void addObservationOccupancy(const Entity& entity, const Entity& self, float* buffer, int bufferLen) const;
-  void addObservationBoundary(const Entity& self, float* buffer, int bufferLen) const;
+  std::array<float, 5> normalizeCombatPrevAction(const Action& action) const;
+  int possibleAgentSlotForId(int id) const;
+  void resetEpisodeStats();
+  void syncEpisodeStatsFromEntity(const Entity& entity);
+  void syncEpisodeStatsFromLiveAgents();
+  void recordShotFired(const Entity& owner);
+  void recordShotHit(const Entity& source);
+  void recordDamageDealt(const Entity& source, const Entity& target, double amount);
+  void recordDamageTaken(const Entity& target, double amount);
+  void recordKill(const Entity& source, const Entity& target);
+  void recordScoreReward(const Entity& source, const Entity& target);
+  void recordDeath(Entity& target, const Entity& source, DeathCause cause);
+  void recordBoundaryDeath(Entity& target);
+  void recordStatUpgrade(const Entity& entity);
+  void recordTankUpgrade(const Entity& entity, int slotIndex);
+  void updatePackedStatLevels(EpisodeStats& stats, const Entity& entity) const;
+  EpisodeStats* episodeStatsForAgentId(int id);
+  const EpisodeStats* episodeStatsForAgentId(int id) const;
 
   Config config_;
   Rng rng_;
   Arena arena_;
-  ObservationSpec observationSpec_;
+  CombatObservationSpec combatObservationSpec_;
   std::vector<Entity> entities_;
   std::vector<int> agentIds_;
   std::vector<int> possibleAgentIds_;
+  std::vector<EpisodeStats> episodeStats_;
+  std::vector<std::array<float, 5>> combatPrevActions_;
   int tick_ = 0;
   int nextId_ = 0;
   int nextHash_ = 1;

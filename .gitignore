@@ -8,3 +8,28 @@ ext/
 package/
 client/public/
 replit.nix
+.grepai/
+
+# --- Python / local dev ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- RL training artifacts (local SSD; see league_initialization/paths.py) ---
+# League safetensors (~GB), Redis AOF/RDB, RLlib Tune checkpoints, W&B runs.
+training_data/
+
+# Env-runner probe cache written by resource_compute/env_runner_capacity.py
+RL_testing/resource_compute/training_data/
+
+# Observability eval outputs (legacy path; primary runs live under training_data/W&B/)
+observability/runs/**
+!observability/runs/.gitkeep
+!observability/runs/benchmarks.md
+
+# W&B scratch dirs if created inside the repo
+wandb/
+.wandb/
